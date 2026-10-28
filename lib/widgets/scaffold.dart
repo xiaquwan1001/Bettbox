@@ -7,6 +7,7 @@ import 'package:bett_box/providers/app.dart';
 import 'package:bett_box/widgets/fade_box.dart';
 import 'package:bett_box/widgets/pop_scope.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -33,6 +34,7 @@ class CommonScaffold extends StatefulWidget {
   final AppBarEditState? editState;
   final AppBarSearchState? searchState;
   final OnKeywordsUpdateCallback? onKeywordsUpdate;
+  final List<String>? keywords;
   final bool scrollEdgeFade;
   final VoidCallback? onAppBarDoubleTap;
 
@@ -50,6 +52,7 @@ class CommonScaffold extends StatefulWidget {
     this.searchState,
     this.floatingActionButton,
     this.onKeywordsUpdate,
+    this.keywords,
     this.scrollEdgeFade = true,
     this.onAppBarDoubleTap,
   });
@@ -83,6 +86,7 @@ class CommonScaffoldState extends State<CommonScaffold> {
     _appBarState = ValueNotifier(
       AppBarState(editState: widget.editState, searchState: widget.searchState),
     );
+    _keywordsNotifier.value = widget.keywords ?? [];
   }
 
   Future<void> _updateSearchState(AppBarSearchStateBuilder builder) async {
@@ -127,6 +131,10 @@ class CommonScaffoldState extends State<CommonScaffold> {
   @override
   void didUpdateWidget(CommonScaffold oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.keywords != null &&
+        !listEquals(_keywordsNotifier.value, widget.keywords)) {
+      _keywordsNotifier.value = widget.keywords!;
+    }
     if (oldWidget.editState != widget.editState) {
       _appBarState.value = _appBarState.value.copyWith(
         editState: widget.editState,
@@ -176,6 +184,7 @@ class CommonScaffoldState extends State<CommonScaffold> {
     if (isContains) return;
     final keywords = List<String>.from(_keywordsNotifier.value)..add(keyword);
     _keywordsNotifier.value = keywords;
+    widget.onKeywordsUpdate?.call(keywords);
   }
 
   void _deleteKeyword(String keyword) {
@@ -184,6 +193,7 @@ class CommonScaffoldState extends State<CommonScaffold> {
     final keywords = List<String>.from(_keywordsNotifier.value)
       ..remove(keyword);
     _keywordsNotifier.value = keywords;
+    widget.onKeywordsUpdate?.call(keywords);
   }
 
   Widget? _buildLeading() {
@@ -337,11 +347,6 @@ class CommonScaffoldState extends State<CommonScaffold> {
           ValueListenableBuilder(
             valueListenable: _keywordsNotifier,
             builder: (_, keywords, _) {
-              if (widget.onKeywordsUpdate != null) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  widget.onKeywordsUpdate!(keywords);
-                });
-              }
               if (keywords.isEmpty) {
                 return SizedBox();
               }
