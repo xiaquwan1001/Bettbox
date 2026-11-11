@@ -90,6 +90,10 @@ jobs:
           test -x "$BUNDLE/Bettbox"
           test -x "$BUNDLE/BettboxCore"
           tar -C "$BUNDLE" -czf "Bettbox-linux-x64-$(date -u +%Y%m%d).tar.gz" .
+          # 自检：把产物内容和体积打进日志，产物不用下载也能核对
+          ls -lh "$BUNDLE/Bettbox" "$BUNDLE/BettboxCore" "$BUNDLE/lib/libapp.so"
+          tar tzf Bettbox-linux-x64-*.tar.gz | grep -E '^\./(Bettbox|BettboxCore|lib/libapp\.so)$'
+          ls -lh Bettbox-linux-x64-*.tar.gz
           sha256sum Bettbox-linux-x64-*.tar.gz | tee sha256sum.txt
 
       - name: Upload artifact
