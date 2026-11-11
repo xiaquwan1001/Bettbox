@@ -1,0 +1,185 @@
+name: nightly
+
+# 个人 fork 的夜版构建：默认只出 Linux x64，可手动勾选 Android arm64（debug 签名，
+# applicationIdSuffix=.debug，可与官方包并存）。产物只上传 artifact，不建 Release、
+# 不需要任何签名密钥。
+on:
+  schedule:
+    # UTC 19:00 = 北京时间 03:00
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+    inputs:
+      android:
+        description: '同时构建 Android arm64（debug 签名）'
+        type: boolean
+        default: false
+  push:
+    branches:
+      - integration/upstream-prs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.47.7'
+  GO_VERSION: '1.25.x'
+
+jobs:
+  linux-x64:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install Dependencies (Linux)
+        run: |
+          sudo apt-get update -o Acquire::Retries=3 -o Acquire::ForceIPv4=true
+          sudo apt-get install -y -o Acquire::Retries=3 --no-install-recommends \
+            ninja-build libgtk-3-dev libayatana-appindicator3-dev \
+            libkeybinder-3.0-dev pkg-config
+
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: core/go.sum
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+          cache-key: flutter-linux-x64-${{ hashFiles('**/pubspec.lock') }}
+
+      - name: Fetch runtime assets
+        # assets/data 下的 geo 数据与内嵌 web UI 都被 gitignore，构建前必须补齐
+        run: |
+          set -e
+          mkdir -p assets/data
+          fetch() { curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "assets/data/$2" "$1"; }
+          fetch https://github.com/appshubcc/bett-rules/releases/download/latest/geosite.dat GeoSite.dat
+          fetch https://github.com/appshubcc/bett-rules/releases/download/latest/geoip.metadb geoip.metadb
+          fetch https://github.com/appshubcc/bett-rules/releases/download/latest/GeoLite2-ASN-lite.mmdb ASN.mmdb
+          fetch https://github.com/Zephyruso/zashboard/releases/download/v3.29.1/dist-no-fonts.zip zash.zip
+          ls -l assets/data
+
+      - name: Build core
+        run: |
+          cd core
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v3 \
+            go build -trimpath -ldflags="-w -s" -tags=with_gvisor \
+            -o ../libclash/linux/BettboxCore .
+
+      - name: Build app
+        run: |
+          flutter pub get
+          dart run build_runner build
+          flutter build linux --release
+
+      - name: Package
+        run: |
+          BUNDLE=build/linux/x64/release/bundle
+          test -x "$BUNDLE/Bettbox"
+          test -x "$BUNDLE/BettboxCore"
+          tar -C "$BUNDLE" -czf "Bettbox-linux-x64-$(date -u +%Y%m%d).tar.gz" .
+          sha256sum Bettbox-linux-x64-*.tar.gz | tee sha256sum.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bettbox-linux-x64-nightly
+          path: |
+            Bettbox-linux-x64-*.tar.gz
+            sha256sum.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  android-arm64:
+    # 只在手动触发且勾选 android 时跑；debug 签名（包名带 .debug），可与官方版并存
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.android }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Android NDK
+        shell: bash
+        run: |
+          NDK_VERSION="28.2.13676358"
+          ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}
+          SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          attempt=0
+          while true; do
+            if [[ -d "${ANDROID_NDK}" && -e "${ANDROID_NDK}/package.xml" ]]; then
+              echo "ANDROID_NDK=${ANDROID_NDK}" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "NDK install attempt ${attempt}/3" >&2
+            rm -rf "${ANDROID_NDK}"
+            sleep 5
+            [[ "$attempt" -gt 3 ]] && exit 1
+            : $((attempt++))
+            timeout -k 10 600 "${SDKMANAGER}" --install "ndk;${NDK_VERSION}" <<< "y" >/dev/null || true
+          done
+
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: core/go.sum
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+          cache-key: flutter-android-arm64-${{ hashFiles('**/pubspec.lock') }}
+
+      - name: Fetch runtime assets
+        run: |
+          set -e
+          mkdir -p assets/data
+          fetch() { curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "assets/data/$2" "$1"; }
+          fetch https://github.com/appshubcc/bett-rules/releases/download/latest/geosite.dat GeoSite.dat
+          fetch https://github.com/appshubcc/bett-rules/releases/download/latest/geoip.metadb geoip.metadb
+          fetch https://github.com/appshubcc/bett-rules/releases/download/latest/GeoLite2-ASN-lite.mmdb ASN.mmdb
+          fetch https://github.com/Zephyruso/zashboard/releases/download/v3.29.1/dist-no-fonts.zip zash.zip
+
+      - name: Build
+        run: |
+          flutter pub get
+          dart run build_runner build
+          dart setup.dart android --arch arm64
+          flutter build apk --debug --target-platform android-arm64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bettbox-android-arm64-nightly-debug
+          path: build/app/outputs/flutter-apk/*.apk
+          retention-days: 14
+          if-no-files-found: error
