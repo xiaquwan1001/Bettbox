@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:bett_box/common/common.dart';
+import 'package:bett_box/controller.dart';
 import 'package:bett_box/state.dart';
 import 'package:bett_box/utils/platform_check.dart';
 
@@ -190,7 +191,8 @@ class ExternalControl {
   static const _helpText =
       'commands: ping | status | profiles | profile [id|label] | '
       'profile-update [id|label|all] | mode rule|global|direct | tun on|off | '
-      'core start|stop|restart|status | apply | dns | show | exit | restart';
+      'set <field> <value> | core start|stop|restart|status | '
+      'apply | dns | show | exit | restart';
 
   static Future<String?> _dispatch(String command) async {
     final parts = command.split(RegExp(r'\s+'));
@@ -233,6 +235,12 @@ class ExternalControl {
         return controller.controlSetTun(args.first);
       case 'core':
         return controller.controlCore(args.isEmpty ? 'status' : args.first);
+      case 'set':
+        if (args.length < 2) {
+          return 'error: usage: set <field> <value> '
+              '(fields: ${AppController.controlSettableFields.join(', ')})';
+        }
+        return controller.controlSet(args.first, args.sublist(1).join(' '));
       case 'apply':
         await controller.applyProfile();
         return 'ok: config applied';
